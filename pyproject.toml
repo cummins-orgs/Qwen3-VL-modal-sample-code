@@ -4,21 +4,11 @@ version = "0.1.0"
 description = "Qwen3-VL Visual QA service on Modal"
 requires-python = ">=3.11"
 dependencies = [
-    "modal",
-    "transformers>=4.57.0",
-    "numpy<2",
-    "fastapi[standard]>=0.115.4",
-    "pydantic>=2.9.2",
-    "requests>=2.32.3",
-    "starlette>=0.41.2",
-    "torch>=2.7.1",
-    "torchvision",
-    "hf-xet>=1.1.5",
-    "accelerate",
-    "pillow",
-    "term-image>=0.7.1",
-    "huggingface-hub",
+    "modal>=0.69.0",
 ]
+
+# Note: All other dependencies (transformers, torch, fastapi, etc.) are installed
+# in the Modal container image, not locally. See modal_app.py for the image definition.
 
 [build-system]
 requires = ["hatchling"]
