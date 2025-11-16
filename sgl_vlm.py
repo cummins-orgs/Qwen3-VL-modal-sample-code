@@ -79,17 +79,18 @@ vlm_image = (
     modal.Image.from_registry(f"nvidia/cuda:{tag}", add_python="3.11")
     .entrypoint([])  # removes chatty prints on entry
     .uv_pip_install(  # add transformers and Python dependencies
-        "transformers==4.54.1",
+        "transformers>=4.57.0",
         "numpy<2",
-        "fastapi[standard]==0.115.4",
-        "pydantic==2.9.2",
-        "requests==2.32.3",
-        "starlette==0.41.2",
-        "torch==2.7.1",
-        "hf-xet==1.1.5",
+        "fastapi[standard]>=0.115.4",
+        "pydantic>=2.9.2",
+        "requests>=2.32.3",
+        "starlette>=0.41.2",
+        "torch>=2.7.1",
+        "torchvision",  # needed for AutoVideoProcessor in Qwen3VL
+        "hf-xet>=1.1.5",
         "accelerate",  # needed for device_map="auto"
         "pillow",  # needed for image processing
-        pre=True,
+        "huggingface-hub",  # needed for snapshot_download
     )
     .env(
         {
@@ -101,7 +102,7 @@ vlm_image = (
         download_model, volumes=volumes
     )
     .uv_pip_install(  # add an optional extra that renders images in the terminal
-        "term-image==0.7.1"
+        "term-image>=0.7.1"
     )
 )
 
