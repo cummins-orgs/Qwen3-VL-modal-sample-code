@@ -1,11 +1,11 @@
-# # Run Qwen2-VL on SGLang for Visual QA
+# # Run Qwen3-VL with Transformers for Visual QA
 
 # Vision-Language Models (VLMs) are like LLMs with eyes:
 # they can generate text based not just on other text,
 # but on images as well.
 
-# This example shows how to run a VLM on Modal using the
-# [SGLang](https://github.com/sgl-project/sglang) library.
+# This example shows how to run the Qwen3-VL model on Modal using the
+# [Transformers](https://github.com/huggingface/transformers) library.
 
 # Here's a sample inference, with the image rendered directly (and at low resolution) in the terminal:
 
@@ -38,22 +38,14 @@ GPU_COUNT = os.environ.get("GPU_COUNT", 1)
 
 GPU_CONFIG = f"{GPU_TYPE}:{GPU_COUNT}"
 
-SGL_LOG_LEVEL = "error"  # try "debug" or "info" if you have issues
-
 MINUTES = 60  # seconds
 
-# We use the [Qwen2-VL-7B-Instruct](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct)
-# model by Alibaba.
-
-# MODEL_PATH = "Qwen/Qwen2-VL-7B-Instruct"
-# MODEL_REVISION = "a7a06a1cc11b4514ce9edcde0e3ca1d16e5ff2fc"
-# TOKENIZER_PATH = "Qwen/Qwen2-VL-7B-Instruct"
-# MODEL_CHAT_TEMPLATE = "qwen2-vl"
+# We use the [Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct)
+# model by Alibaba, the latest version of their VLM series.
 
 MODEL_PATH = "Qwen/Qwen3-VL-4B-Instruct"
 MODEL_REVISION = "d1883f3364402876f33f2ce7cfafe737d1e326c7"
 TOKENIZER_PATH = "Qwen/Qwen3-VL-4B-Instruct"
-MODEL_CHAT_TEMPLATE = "qwen3-vl"
 
 # We download it from the Hugging Face Hub using the Python function below.
 # We'll store it in a [Modal Volume](https://modal.com/docs/guide/volumes)
@@ -86,8 +78,7 @@ tag = f"{cuda_version}-{flavor}-{operating_sys}"
 vlm_image = (
     modal.Image.from_registry(f"nvidia/cuda:{tag}", add_python="3.11")
     .entrypoint([])  # removes chatty prints on entry
-    .apt_install("libnuma-dev")  # Add NUMA library for sgl_kernel
-    .uv_pip_install(  # add sglang and some Python dependencies
+    .uv_pip_install(  # add transformers and Python dependencies
         "transformers==4.54.1",
         "numpy<2",
         "fastapi[standard]==0.115.4",
@@ -95,9 +86,9 @@ vlm_image = (
         "requests==2.32.3",
         "starlette==0.41.2",
         "torch==2.7.1",
-        "sglang[all]==0.4.10.post2",
-        "sgl-kernel==0.2.8",
         "hf-xet==1.1.5",
+        "accelerate",  # needed for device_map="auto"
+        "pillow",  # needed for image processing
         pre=True,
     )
     .env(
@@ -126,7 +117,7 @@ vlm_image = (
 # By decorating it with `@modal.fastapi_endpoint`, we expose it as an HTTP endpoint,
 # so it can be accessed over the public Internet from any client.
 
-app = modal.App("example-sgl-vlm")
+app = modal.App("example-qwen3-vlm")
 
 
 @app.cls(
@@ -140,26 +131,24 @@ app = modal.App("example-sgl-vlm")
 class Model:
     @modal.enter()  # what should a container do after it starts but before it gets input?
     def start_runtime(self):
-        """Starts an SGL runtime to execute inference."""
-        import sglang as sgl
+        """Loads the Qwen3 VLM model using transformers."""
+        from transformers import Qwen3VLForConditionalGeneration, AutoProcessor
 
-        self.runtime = sgl.Runtime(
-            model_path=MODEL_PATH,
-            tokenizer_path=TOKENIZER_PATH,
-            tp_size=GPU_COUNT,  # t_ensor p_arallel size, number of GPUs to split the model over
-            log_level=SGL_LOG_LEVEL,
+        # Load the model with automatic device mapping
+        self.model = Qwen3VLForConditionalGeneration.from_pretrained(
+            MODEL_PATH,
+            dtype="auto",
+            device_map="auto"
         )
-        self.runtime.endpoint.chat_template = sgl.lang.chat_template.get_chat_template(
-            MODEL_CHAT_TEMPLATE
-        )
-        sgl.set_default_backend(self.runtime)
+
+        # Load the processor for handling images and text
+        self.processor = AutoProcessor.from_pretrained(TOKENIZER_PATH)
 
     @modal.fastapi_endpoint(method="POST", docs=True)
     def generate(self, request: dict) -> str:
         from pathlib import Path
 
         import requests
-        import sglang as sgl
         from term_image.image import from_file
 
         start = time.monotonic_ns()
@@ -179,18 +168,43 @@ class Model:
         image_path = Path(f"/tmp/{uuid4()}-{image_filename}")
         image_path.write_bytes(response.content)
 
-        @sgl.function
-        def image_qa(s, image_path, question):
-            s += sgl.user(sgl.image(str(image_path)) + question)
-            s += sgl.assistant(sgl.gen("answer"))
-
         question = request.get("question")
         if question is None:
             question = "What is this?"
 
-        state = image_qa.run(
-            image_path=image_path, question=question, max_new_tokens=128
+        # Prepare messages in the format expected by Qwen3-VL
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "image": str(image_path),
+                    },
+                    {"type": "text", "text": question},
+                ],
+            }
+        ]
+
+        # Prepare inputs using the processor
+        inputs = self.processor.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            return_dict=True,
+            return_tensors="pt"
         )
+        inputs = inputs.to(self.model.device)
+
+        # Generate response
+        generated_ids = self.model.generate(**inputs, max_new_tokens=128)
+        generated_ids_trimmed = [
+            out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
+        ]
+        output_text = self.processor.batch_decode(
+            generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
+        )
+
         # show the question and image in the terminal for demonstration purposes
         print(Colors.BOLD, Colors.GRAY, "Question: ", question, Colors.END, sep="")
         terminal_image = from_file(image_path)
@@ -199,11 +213,13 @@ class Model:
             f"request {request_id} completed in {round((time.monotonic_ns() - start) / 1e9, 2)} seconds"
         )
 
-        return state["answer"]
+        return output_text[0]
 
     @modal.exit()  # what should a container do before it shuts down?
     def shutdown_runtime(self):
-        self.runtime.shutdown()
+        # Clean up resources if needed
+        del self.model
+        del self.processor
 
 
 # ## Asking questions about images via POST
