@@ -1,15 +1,17 @@
 # Qwen3-VL Visual QA on Modal
 
-A serverless Visual Question Answering (VQA) service using [Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct) deployed on [Modal](https://modal.com). This service can answer questions about images through a simple HTTP API.
+Sample code for  Visual Question Answering (VQA) using [Qwen3-VL-4B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-4B-Instruct) deployed on [Modal](https://modal.com). 
 
 ## What is this?
 
-Vision-Language Models (VLMs) are like LLMs with eyes - they can generate text based not just on other text, but on images as well. This project deploys the Qwen3-VL model as a serverless API endpoint that:
+loosely based on Modal's sample code for Qwen 2 VL, this project deploys the Qwen3-VL model as a serverless API endpoint that:
 
 - Accepts an image URL and a question
-- Returns an AI-generated answer about the image
+- Returns an answer about the image
 - Scales automatically from zero to handle any load
 - Runs on GPU infrastructure without you managing servers
+- Has nice little touches like displaying the image in the terminal as you go
+
 
 ## Prerequisites
 
