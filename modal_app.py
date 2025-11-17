@@ -78,6 +78,7 @@ tag = f"{cuda_version}-{flavor}-{operating_sys}"
 vlm_image = (
     modal.Image.from_registry(f"nvidia/cuda:{tag}", add_python="3.11")
     .entrypoint([])  # removes chatty prints on entry
+    # .apt_install("ffmpeg")  # add system ffmpeg
     .uv_pip_install(  # add transformers and Python dependencies
         "transformers>=4.57.0",
         "numpy<2",
@@ -86,7 +87,9 @@ vlm_image = (
         "requests>=2.32.3",
         "starlette>=0.41.2",
         "torch>=2.7.1",
+      #  "torchcodec>=0.2.4",
         "torchvision",  # needed for AutoVideoProcessor in Qwen3VL
+        "av",  # PyAV for video decoding
         "hf-xet>=1.1.5",
         "accelerate",  # needed for device_map="auto"
         "pillow",  # needed for image processing
@@ -112,8 +115,8 @@ vlm_image = (
 
 # The code below adds a modal `Cls` to an `App` that runs the VLM.
 
-# We define a method `generate` that takes a URL for an image and a question
-# about the image as inputs and returns the VLM's answer.
+# We define a method `generate` that takes a URL for a video and a question
+# about the video as inputs and returns the VLM's answer.
 
 # By decorating it with `@modal.fastapi_endpoint`, we expose it as an HTTP endpoint,
 # so it can be accessed over the public Internet from any client.
@@ -142,7 +145,7 @@ class Model:
             device_map="auto"
         )
 
-        # Load the processor for handling images and text
+        # Load the processor for handling videos and text
         self.processor = AutoProcessor.from_pretrained(TOKENIZER_PATH)
 
     @modal.fastapi_endpoint(method="POST", docs=True)
@@ -150,28 +153,27 @@ class Model:
         from pathlib import Path
 
         import requests
-        from term_image.image import from_file
 
         start = time.monotonic_ns()
         request_id = uuid4()
         print(f"Generating response to request {request_id}")
 
-        image_url = request.get("image_url")
-        if image_url is None:
-            image_url = (
-                "https://modal-public-assets.s3.amazonaws.com/golden-gate-bridge.jpg"
+        video_url = request.get("video_url")
+        if video_url is None:
+            video_url = (
+                "https://github.com/intel-iot-devkit/sample-videos/raw/master/bottle-detection.mp4"
             )
 
-        response = requests.get(image_url)
+        response = requests.get(video_url)
         response.raise_for_status()
 
-        image_filename = image_url.split("/")[-1]
-        image_path = Path(f"/tmp/{uuid4()}-{image_filename}")
-        image_path.write_bytes(response.content)
+        video_filename = video_url.split("/")[-1]
+        video_path = Path(f"/tmp/{uuid4()}-{video_filename}")
+        video_path.write_bytes(response.content)
 
         question = request.get("question")
         if question is None:
-            question = "What is this?"
+            question = "How many bottles are there in the video?"
 
         # Prepare messages in the format expected by Qwen3-VL
         messages = [
@@ -179,8 +181,8 @@ class Model:
                 "role": "user",
                 "content": [
                     {
-                        "type": "image",
-                        "image": str(image_path),
+                        "type": "video",
+                        "video": str(video_path),
                     },
                     {"type": "text", "text": question},
                 ],
@@ -206,10 +208,9 @@ class Model:
             generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )
 
-        # show the question and image in the terminal for demonstration purposes
+        # show the question in the terminal for demonstration purposes
         print(Colors.BOLD, Colors.GRAY, "Question: ", question, Colors.END, sep="")
-        terminal_image = from_file(image_path)
-        terminal_image.draw()
+        print(Colors.BOLD, Colors.GRAY, "Video: ", video_url, Colors.END, sep="")
         print(
             f"request {request_id} completed in {round((time.monotonic_ns() - start) / 1e9, 2)} seconds"
         )
@@ -223,9 +224,9 @@ class Model:
         del self.processor
 
 
-# ## Asking questions about images via POST
+# ## Asking questions about videos via POST
 
-# Now, we can send this Modal Function a POST request with an image and a question
+# Now, we can send this Modal Function a POST request with a video and a question
 # and get back an answer.
 
 # The code below will start up the inference service
@@ -242,7 +243,7 @@ class Model:
 
 @app.local_entrypoint()
 def main(
-    image_url: Optional[str] = None, question: Optional[str] = None, twice: bool = True
+    video_url: Optional[str] = None, question: Optional[str] = None, twice: bool = True
 ):
     import json
     import urllib.request
@@ -251,7 +252,7 @@ def main(
 
     payload = json.dumps(
         {
-            "image_url": image_url,
+            "video_url": video_url,
             "question": question,
         },
     )
